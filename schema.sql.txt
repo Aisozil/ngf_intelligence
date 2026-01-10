@@ -1,0 +1,171 @@
+-- ============================================
+-- NGF INTELLIGENCE DATABASE SCHEMA
+-- ============================================
+
+-- 1. DIMENSION TABLES
+-- --------------------------------------------
+
+CREATE TABLE dim_state (
+    state_id SERIAL PRIMARY KEY,
+    state_name VARCHAR(100) NOT NULL UNIQUE,
+    state_code VARCHAR(10) NOT NULL UNIQUE,
+    geo_zone VARCHAR(50) NOT NULL,
+    capital VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE dim_date (
+    date_id SERIAL PRIMARY KEY,
+    full_date DATE NOT NULL UNIQUE,
+    year INTEGER NOT NULL,
+    quarter INTEGER NOT NULL,
+    month INTEGER NOT NULL,
+    month_name VARCHAR(20) NOT NULL,
+    year_month VARCHAR(7) NOT NULL,
+    is_current_month BOOLEAN DEFAULT FALSE,
+    fiscal_year INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE dim_indicator (
+    indicator_id SERIAL PRIMARY KEY,
+    indicator_code VARCHAR(50) NOT NULL UNIQUE,
+    indicator_name VARCHAR(200) NOT NULL,
+    indicator_category VARCHAR(100) NOT NULL,
+    indicator_subcategory VARCHAR(100),
+    unit_of_measure VARCHAR(50) NOT NULL,
+    description TEXT,
+    source VARCHAR(200),
+    update_frequency VARCHAR(50),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. FACT TABLES
+-- --------------------------------------------
+
+CREATE TABLE fact_economic_indicator (
+    fact_id BIGSERIAL PRIMARY KEY,
+    date_id INTEGER NOT NULL REFERENCES dim_date(date_id),
+    state_id INTEGER REFERENCES dim_state(state_id),
+    indicator_id INTEGER NOT NULL REFERENCES dim_indicator(indicator_id),
+    value DECIMAL(18, 4),
+    value_yoy_change DECIMAL(18, 4),
+    value_mom_change DECIMAL(18, 4),
+    data_quality_flag VARCHAR(20) DEFAULT 'verified',
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_indicator_date_state UNIQUE(date_id, state_id, indicator_id)
+);
+
+CREATE INDEX idx_fact_date ON fact_economic_indicator(date_id);
+CREATE INDEX idx_fact_state ON fact_economic_indicator(state_id);
+CREATE INDEX idx_fact_indicator ON fact_economic_indicator(indicator_id);
+CREATE INDEX idx_fact_composite ON fact_economic_indicator(indicator_id, date_id, state_id);
+
+-- 3. MATERIALIZED VIEWS
+-- --------------------------------------------
+
+CREATE MATERIALIZED VIEW mv_latest_indicators AS
+SELECT 
+    i.indicator_code,
+    i.indicator_name,
+    i.indicator_category,
+    s.state_name,
+    d.year_month,
+    f.value,
+    f.value_yoy_change,
+    f.value_mom_change
+FROM fact_economic_indicator f
+JOIN dim_indicator i ON f.indicator_id = i.indicator_id
+JOIN dim_date d ON f.date_id = d.date_id
+LEFT JOIN dim_state s ON f.state_id = s.state_id
+WHERE f.fact_id IN (
+    SELECT DISTINCT ON (indicator_id, COALESCE(state_id, 0)) fact_id
+    FROM fact_economic_indicator
+    ORDER BY indicator_id, COALESCE(state_id, 0), date_id DESC
+);
+
+CREATE UNIQUE INDEX idx_mv_latest ON mv_latest_indicators(indicator_code, COALESCE(state_name, 'National'));
+
+CREATE MATERIALIZED VIEW mv_inflation_monthly AS
+SELECT 
+    d.year, d.month, d.year_month, s.state_name, s.geo_zone,
+    MAX(CASE WHEN i.indicator_subcategory = 'food' THEN f.value END) as food_inflation,
+    MAX(CASE WHEN i.indicator_subcategory = 'headline' THEN f.value END) as headline_inflation
+FROM fact_economic_indicator f
+JOIN dim_indicator i ON f.indicator_id = i.indicator_id
+JOIN dim_date d ON f.date_id = d.date_id
+LEFT JOIN dim_state s ON f.state_id = s.state_id
+WHERE i.indicator_category = 'inflation'
+GROUP BY d.year, d.month, d.year_month, s.state_name, s.geo_zone;
+
+CREATE INDEX idx_mv_inflation_ym ON mv_inflation_monthly(year_month);
+
+-- 4. REFERENCE DATA
+-- --------------------------------------------
+
+INSERT INTO dim_state (state_name, state_code, geo_zone, capital) VALUES
+('Abia', 'AB', 'South East', 'Umuahia'),
+('Adamawa', 'AD', 'North East', 'Yola'),
+('Akwa Ibom', 'AK', 'South South', 'Uyo'),
+('Anambra', 'AN', 'South East', 'Awka'),
+('Bauchi', 'BA', 'North East', 'Bauchi'),
+('Bayelsa', 'BY', 'South South', 'Yenagoa'),
+('Benue', 'BE', 'North Central', 'Makurdi'),
+('Borno', 'BO', 'North East', 'Maiduguri'),
+('Cross River', 'CR', 'South South', 'Calabar'),
+('Delta', 'DE', 'South South', 'Asaba'),
+('Ebonyi', 'EB', 'South East', 'Abakaliki'),
+('Edo', 'ED', 'South South', 'Benin City'),
+('Ekiti', 'EK', 'South West', 'Ado Ekiti'),
+('Enugu', 'EN', 'South East', 'Enugu'),
+('Gombe', 'GO', 'North East', 'Gombe'),
+('Imo', 'IM', 'South East', 'Owerri'),
+('Jigawa', 'JI', 'North West', 'Dutse'),
+('Kaduna', 'KD', 'North West', 'Kaduna'),
+('Kano', 'KN', 'North West', 'Kano'),
+('Katsina', 'KT', 'North West', 'Katsina'),
+('Kebbi', 'KE', 'North West', 'Birnin Kebbi'),
+('Kogi', 'KO', 'North Central', 'Lokoja'),
+('Kwara', 'KW', 'North Central', 'Ilorin'),
+('Lagos', 'LA', 'South West', 'Ikeja'),
+('Nasarawa', 'NA', 'North Central', 'Lafia'),
+('Niger', 'NI', 'North Central', 'Minna'),
+('Ogun', 'OG', 'South West', 'Abeokuta'),
+('Ondo', 'ON', 'South West', 'Akure'),
+('Osun', 'OS', 'South West', 'Osogbo'),
+('Oyo', 'OY', 'South West', 'Ibadan'),
+('Plateau', 'PL', 'North Central', 'Jos'),
+('Rivers', 'RI', 'South South', 'Port Harcourt'),
+('Sokoto', 'SO', 'North West', 'Sokoto'),
+('Taraba', 'TA', 'North East', 'Jalingo'),
+('Yobe', 'YO', 'North East', 'Damaturu'),
+('Zamfara', 'ZA', 'North West', 'Gusau'),
+('FCT', 'FC', 'North Central', 'Abuja');
+
+INSERT INTO dim_indicator (indicator_code, indicator_name, indicator_category, indicator_subcategory, unit_of_measure, description, update_frequency) VALUES
+('INF_FOOD', 'Food Inflation Rate', 'inflation', 'food', '%', 'Year-on-year food inflation rate', 'monthly'),
+('INF_HEADLINE', 'Headline Inflation Rate', 'inflation', 'headline', '%', 'Year-on-year all-items inflation rate', 'monthly'),
+('GDP_NOMINAL', 'Nominal GDP', 'gdp', 'nominal', 'NGN Billion', 'Gross Domestic Product at current prices', 'quarterly'),
+('GDP_REAL', 'Real GDP', 'gdp', 'real', 'NGN Billion', 'Gross Domestic Product at constant prices', 'quarterly'),
+('GDP_GROWTH', 'GDP Growth Rate', 'gdp', 'growth', '%', 'Year-on-year GDP growth rate', 'quarterly'),
+('DEBT_DOMESTIC', 'Domestic Debt', 'debt', 'domestic', 'NGN Billion', 'Total domestic government debt', 'quarterly'),
+('DEBT_EXTERNAL', 'External Debt', 'debt', 'external', 'USD Million', 'Total external government debt', 'quarterly'),
+('DEBT_TOTAL', 'Total Public Debt', 'debt', 'total', 'NGN Billion', 'Total government debt (domestic + external)', 'quarterly'),
+('DEBT_GDP_RATIO', 'Debt-to-GDP Ratio', 'debt', 'ratio', '%', 'Public debt as percentage of GDP', 'quarterly');
+
+INSERT INTO dim_date (full_date, year, quarter, month, month_name, year_month, fiscal_year)
+SELECT 
+    d::DATE, 
+    EXTRACT(YEAR FROM d),
+    EXTRACT(QUARTER FROM d),
+    EXTRACT(MONTH FROM d),
+    TRIM(TO_CHAR(d, 'Month')),
+    TO_CHAR(d, 'YYYY-MM'),
+    EXTRACT(YEAR FROM d)
+FROM generate_series('2020-01-01'::DATE, '2030-12-31'::DATE, '1 day') AS d;
