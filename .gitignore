@@ -1,0 +1,17 @@
+# --- Security ---
+.env
+passwords.txt
+
+# --- Database Data (Keep Schema, Ignore Data) ---
+*.sql
+*.dump
+*.backup
+*.db
+# Specific heavy files
+full_backup.sql
+
+# --- Python Junk ---
+__pycache__/
+*.pyc
+venv/
+.pytest_cache/
